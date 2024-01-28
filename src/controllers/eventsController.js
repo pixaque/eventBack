@@ -2,8 +2,10 @@ const bcryptjs = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const {db} = require('../lib/db');
-
-var moment = require('moment'); // require
+const { Prisma } = require('@prisma/client');
+const { now } = require('mongoose');
+const moment = require('moment');
+//const {useAuth, useSession} = require('@clerk/clerk-react');
 
 /*
 const {
@@ -16,13 +18,153 @@ const {
   } = require('../types/index');
 */
 
+// GET EVENTS BY SEARCH
+exports.searchEvents= async (req, res) => {
+  try{
+
+    console.log("All Search params: ", req.body);
+
+    const {categoryId, searchText, page, limit} = req.body;
+
+    const skipAmount = (Number(page) - 1) * limit;
+
+    if(categoryId && searchText){
+
+      const allEventsbyCategory = await db.$queryRawUnsafe(
+        `SELECT event.id AS eventId, event.title, event.description, event.location, event.createdAt,
+        event.imageUrl, event.startDateTime, event.endDateTime, event.price, event.isFree,
+        event.url, event.categoryId, event.organizerId,
+        category.id AS categoryId, category.name AS categoryName,
+        user.id AS organizerId, user.clerkId AS clerkId, user.email, user.username, user.firstName, user.lastName, user.photo
+        FROM event
+        JOIN user ON event.organizerId = user.clerkId
+        JOIN category ON event.categoryId = category.id
+        WHERE MATCH (title, description, location) AGAINST ('${searchText}')
+        And event.categoryId = ('${categoryId}') 
+        AND event.endDateTime >= CURRENT_DATE
+        ORDER BY event.createdAt DESC
+        LIMIT ${limit}
+        OFFSET ${skipAmount}`);
+        console.log("All Events Search: ", allEventsbyCategory);
+
+        let finalResults = allEventsbyCategory.map((event, index)=> 
+          (
+            {
+              id: event?.eventId,
+              title: event?.title,
+              description:	event?.description,
+              location: event?.location,
+              createdAt: event?.createdAt,
+              imageUrl:	event?.imageUrl,
+              startDateTime: event?.startDateTime,
+              endDateTime: event?.endDateTime,
+              price:	event?.price,
+              isFree:	event?.isFree,
+              url: event?.url,
+              categoryId:	event?.categoryId,
+              organizerId:	event?.organizerId,
+              category:	{ 
+                id: event?.categoryId,
+                name:  event?.categoryName
+              },
+              organizer:	{ 
+                id: event?.organizerId,
+                clerkId: event?.clerkId, 
+                email: event?.email,
+                username: event?.username,
+                firstName: event?.firstName,
+                lastName: event?.lastName,
+                photo: event?.photo
+              }
+            }
+            
+          )
+        
+        );
+        
+  
+        res.status(200).send({
+          data: finalResults
+        });
+
+    } else {
+
+      const allEventsbyCategory = await db.$queryRawUnsafe(
+      `SELECT event.id AS eventId, event.title, event.description, event.location, event.createdAt,
+      event.imageUrl, event.startDateTime, event.endDateTime, event.price, event.isFree,
+      event.url, event.categoryId, event.organizerId,
+      category.id AS categoryId, category.name AS categoryName,
+      user.id AS organizerId, user.clerkId AS clerkId, user.email, user.username, user.firstName, user.lastName, user.photo
+      FROM event
+      JOIN user ON event.organizerId = user.clerkId
+      JOIN category ON event.categoryId = category.id
+      WHERE MATCH (title, description, location) AGAINST ('${searchText}')
+      AND event.endDateTime >= CURRENT_DATE
+      ORDER BY event.createdAt DESC
+      LIMIT ${limit}
+      OFFSET ${skipAmount}`);
+
+      console.log("All Events Search: ", allEventsbyCategory);
+
+      let finalResults = allEventsbyCategory.map((event, index)=> 
+        (
+          {
+            id: event?.eventId,
+            title: event?.title,
+            description:	event?.description,
+            location: event?.location,
+            createdAt: event?.createdAt,
+            imageUrl:	event?.imageUrl,
+            startDateTime: event?.startDateTime,
+            endDateTime: event?.endDateTime,
+            price:	event?.price,
+            isFree:	event?.isFree,
+            url: event?.url,
+            categoryId:	event?.categoryId,
+            organizerId:	event?.organizerId,
+            category:	{ 
+              id: event?.categoryId,
+              name:  event?.categoryName
+            },
+            organizer:	{ 
+              id: event?.organizerId,
+              clerkId: event?.clerkId, 
+              email: event?.email,
+              username: event?.username,
+              firstName: event?.firstName,
+              lastName: event?.lastName,
+              photo: event?.photo
+            }
+          }
+          
+        )
+      
+      );
+      
+
+      res.status(200).send({
+        data: finalResults
+      });
+      
+    }
+
+  } catch (error) {
+
+    res.status(500).send({
+      error,
+    });
+
+  }
+
+}
+
 // GET ONE EVENT BY ID
 exports.getEventById= async (req, res) => {
   try{
     console.log("BODY:-", req.body.data);
     const { id } = req.body.data;
 
-    const category = await db.event.findUnique({
+    const event = await db.event.findUnique({
       where: {
         id: id,
       },
@@ -33,7 +175,7 @@ exports.getEventById= async (req, res) => {
     });
 
     res.status(200).send({
-      data: category
+      data: event
     });
 
   } catch(error) {
@@ -50,7 +192,16 @@ exports.getAllEventsById= async (req, res) => {
   try{
 
     console.log("All Events params: ", req.body);
-    const {limit, page, userId} = req.body;
+    const {limit, page, userId, setSession} = req.body;
+
+    console.log("LOADED SESSION: ", setSession?.lastActiveToken);
+
+    if(!setSession) {
+      // handle not signed in state
+      res.status(500).send({
+        message: "You are not authorized to access this API endpoint."
+      });
+    }
 
     const skipAmount = (Number(page) - 1) * limit;
 
@@ -62,9 +213,11 @@ exports.getAllEventsById= async (req, res) => {
           }
       });
 
+      //console.log("Events:-", allEvents);
+
       const events = await db.event.findMany({
         where: {
-          organizerId: userId 
+          organizerId: userId,
         },
         include: {
             category: true,
@@ -79,7 +232,8 @@ exports.getAllEventsById= async (req, res) => {
         take: limit,
       });
 
-      //console.log("Events:-", allEvents.length);
+      console.log("Events:-", allEvents.length);
+      //console.log("Events:-", events);
       //const events = await populateEvent(eventsQuery)
       const eventsCount = allEvents.length;
 
@@ -98,14 +252,66 @@ exports.getAllEventsById= async (req, res) => {
 
 }
 
+exports.registerUser = async (req, res) => {
+  
+  const {id, firstName, lastName, imageUrl, emailAddresses, username} = req.user;
+
+  console.log("id :", id);
+  console.log("First Name :", firstName);
+  console.log("Last Name :", lastName);
+  console.log("Image URL :", imageUrl);
+  console.log("Email Address :", emailAddresses[0]?.emailAddress);
+  console.log("User Name :", username);
+
+  const user = await db.user.findUnique( {
+    where: {
+      clerkId: id,
+    }
+  });
+
+  if (user) {
+    console.log("user already exists");
+    return
+    /*
+      return res.status(400).send({
+          message: 'User already exists',
+      });
+      */
+  }
+
+  const newUser = await db.user.create({
+    data: {
+      clerkId: id,
+      email: emailAddresses[0]?.emailAddress,
+      username: username || "username",
+      firstName: firstName,
+      lastName: lastName,
+      photo: imageUrl
+    }
+  });
+
+  return
+  //  await newUser.save();
+  //console.log("YES DOING IT LIKE THIS:");
+
+}
+
+
  // GET ALL EVENTS
+
  exports.getAllEvents = async (req, res) => {
 
+  
+  let setexpiryDate = new Date(new Date().setHours(new Date().getHours() + 12));
   try{
 
     console.log("Get all events: ", req.body);
-    const {query, limit, page, category, eventId} = req.body;
+    const {query, limit, page, category, eventId, setSession} = req.body;
 
+    if(setSession){
+      this.registerUser(setSession);
+    }
+    
     const skipAmount = (Number(page) - 1) * limit;
 
     console.log("Skip Amount: ", skipAmount); 
@@ -114,6 +320,7 @@ exports.getAllEventsById= async (req, res) => {
 
       const allEvents = await db.event.findMany({
         where: {
+          endDateTime: { gte: setexpiryDate },
           OR: [
             {
               categoryId: category 
@@ -126,6 +333,17 @@ exports.getAllEventsById= async (req, res) => {
       });
 
       const events = await db.event.findMany({
+        where: {
+          endDateTime: { gte: setexpiryDate },
+          OR: [
+            {
+              categoryId: category 
+            },
+          ],
+          NOT: {
+            id: eventId,
+          }, 
+        },
         include: {
             category: true,
             organizer: true
@@ -137,17 +355,10 @@ exports.getAllEventsById= async (req, res) => {
         ],
         skip: skipAmount,
         take: limit,
-        where: {
-          OR: [
-            {
-              categoryId: category 
-            },
-          ],
-          NOT: {
-            id: eventId,
-          }, 
-        }
+        
       });
+
+      //console.log("End Date:-", events.map((e)=> {return e.endDateTime <= e.endDateTime}));
 
       //console.log("Events:-", allEvents.length);
       //const events = await populateEvent(eventsQuery)
@@ -159,12 +370,25 @@ exports.getAllEventsById= async (req, res) => {
       });
       
     } else {
-      const allEvents = await db.event.findMany();
-      const events = await db.event.findMany({
-        include: {
-            category: true,
-            organizer: true
+      
+      
+
+      const allEvents = await db.event.findMany(
+        {
+          where: {
+            endDateTime: { gte: setexpiryDate },
           },
+        }
+      );
+
+      const events = await db.event.findMany({
+        where: {
+          endDateTime: { gte: setexpiryDate }
+        },
+        include: {
+          category: true,
+          organizer: true
+        },
         orderBy: [
           {
             createdAt: 'desc',
@@ -174,8 +398,11 @@ exports.getAllEventsById= async (req, res) => {
         take: limit
       });
 
+      //console.log(events);
       //console.log("Events:-", allEvents.length);
       //const events = await populateEvent(eventsQuery)
+      //console.log(new Date());
+      //console.log(setexpiryDate);
       const eventsCount = allEvents.length;
 
       res.status(200).send({
@@ -183,9 +410,6 @@ exports.getAllEventsById= async (req, res) => {
         totalPages: Math.ceil(eventsCount / limit),
       });
     }
-    
-
-    
 
   } catch (error) {
 
@@ -221,6 +445,7 @@ exports.getEvents = async (req, res) => {
         });
     }
 }
+
 /* New Event Call */
 exports.newEvent = async (req, res) => {
 try {
